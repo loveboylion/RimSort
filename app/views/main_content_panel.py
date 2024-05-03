@@ -1,4 +1,6 @@
+import traceback
 import datetime
+import shutil
 from functools import partial
 from gc import collect
 from pathlib import Path
@@ -16,19 +18,15 @@ from zipfile import ZipFile
 
 from loguru import logger
 
-# GitPython depends on git executable being available in PATH
-try:
-    from git import Repo
-    from git.exc import GitCommandError
-
-    GIT_EXISTS = True
-except ImportError:
-    logger.warning(
-        "git not detected in your PATH! Do you have git installed...? git integration will be disabled!"
-    )
-    GIT_EXISTS = False
-
 from github import Github
+from pygit2 import (
+    clone_repository,
+    GitError,
+    init_repository,
+    Repository,
+    GIT_RESET_HARD,
+)
+from pyperclip import copy as copy_to_clipboard
 from PySide6.QtCore import QEventLoop, QProcess, Qt, Slot
 from PySide6.QtWidgets import (
     QDialog,
@@ -680,43 +678,31 @@ class MainContent(QObject):
         if action == "configure_steam_database_repo":
             self._do_configure_steam_database_repo()
         if action == "download_steam_database":
-            if GIT_EXISTS:
-                self._do_clone_repo_to_path(
-                    base_path=str(AppInfo().databases_folder),
-                    repo_url=self.settings_controller.settings.external_steam_metadata_repo,
-                )
-            else:
-                self._do_notify_no_git()
+            self._do_clone_repo_to_path(
+                base_path=str(AppInfo().databases_folder),
+                repo_url=self.settings_controller.settings.external_steam_metadata_repo,
+            )
         if action == "upload_steam_database":
-            if GIT_EXISTS:
-                self._do_upload_db_to_repo(
-                    repo_url=self.settings_controller.settings.external_steam_metadata_repo,
-                    file_name="steamDB.json",
-                )
-            else:
-                self._do_notify_no_git()
+            self._do_upload_db_to_repo(
+                repo_url=self.settings_controller.settings.external_steam_metadata_repo,
+                file_name="steamDB.json",
+            )
         if action == "configure_community_rules_db_path":
             self._do_configure_community_rules_db_file_path()
         if action == "configure_community_rules_db_repo":
             self._do_configure_community_rules_db_repo()
         if action == "download_community_rules_database":
-            if GIT_EXISTS:
-                self._do_clone_repo_to_path(
-                    base_path=str(AppInfo().databases_folder),
-                    repo_url=self.settings_controller.settings.external_community_rules_repo,
-                )
-            else:
-                self._do_notify_no_git()
+            self._do_clone_repo_to_path(
+                base_path=str(AppInfo().databases_folder),
+                repo_url=self.settings_controller.settings.external_community_rules_repo,
+            )
         if action == "open_community_rules_with_rule_editor":
             self._do_open_rule_editor(compact=False, initial_mode="community_rules")
         if action == "upload_community_rules_database":
-            if GIT_EXISTS:
-                self._do_upload_db_to_repo(
-                    repo_url=self.settings_controller.settings.external_community_rules_repo,
-                    file_name="communityRules.json",
-                )
-            else:
-                self._do_notify_no_git()
+            self._do_upload_db_to_repo(
+                repo_url=self.settings_controller.settings.external_community_rules_repo,
+                file_name="communityRules.json",
+            )
         if action == "build_steam_database_thread":
             self._do_build_database_thread()
         if "download_entire_workshop" in action:
@@ -2095,43 +2081,6 @@ class MainContent(QObject):
 
     # GIT MOD ACTIONS
 
-    def _do_add_git_mod(self) -> None:
-        """
-        Opens a QDialogInput that allows the user to edit the run args
-        that are configured to be passed to the Rimworld executable
-        """
-        args, ok = show_dialogue_input(
-            title="Enter git repo",
-            text="Enter a git repository url (http/https) to clone to local mods:",
-        )
-        if ok:
-            self._do_clone_repo_to_path(
-                base_path=self.settings_controller.settings.local_folder,
-                repo_url=args,
-            )
-        else:
-            logger.debug("Cancelling operation.")
-
-    def _do_re_git(self, repo_paths: list) -> None:
-        if GIT_EXISTS:
-            for path in repo_paths:
-                try:
-                    repo = Repo(path)
-                    origin_url = repo.remote("origin").url
-                except Exception as e:
-                    show_warning(
-                        title="Unable to open repository",
-                        text="RimSort failed to open the git repository inside this mod. Please re-download the mod.",
-                    )
-                self._do_clone_repo_to_path(
-                    base_path=os.path.split(path)[0], repo_url=origin_url
-                )
-                self._do_cleanup_gitpython(repo)
-        else:
-            self._do_notify_no_git()
-
-    # EXTERNAL METADATA ACTIONS
-
     def _do_configure_github_identity(self) -> None:
         """
         Opens a QDialogInput that allows user to edit their Github token
@@ -2161,43 +2110,65 @@ class MainContent(QObject):
             logger.debug("USER ACTION: cancelled input!")
             return
 
+    def _do_add_git_mod(self) -> None:
+        """
+        Opens a dialog input for the user to enter a Git repository URL.
+        Clones the repository to the local mods folder if a valid URL is provided.
+        """
+        args, ok = show_dialogue_input(
+            title="Enter git repo",
+            text="Enter a git repository url (http/https) to clone to local mods:",
+        )
+        if ok:
+            self._do_clone_repo_to_path(
+                base_path=self.settings_controller.settings.local_folder,
+                repo_url=args,
+            )
+        else:
+            logger.debug("Operation cancelled.")
+
+    def _do_re_git(self, repo_paths: list) -> None:
+        """
+        Reinitializes Git repositories found in the provided list of paths.
+        Clones or updates each repository accordingly.
+        """
+        for path in repo_paths:
+            try:
+                repo = init_repository(path)
+                origin_url = repo.remotes["origin"].url
+            except Exception as e:
+                show_warning(
+                    title="Unable to open repository",
+                    text="Failed to open the git repository inside this mod. Please re-download the mod.",
+                )
+                continue
+
+            self._do_clone_repo_to_path(base_path=path, repo_url=origin_url)
+            self._do_cleanup_gitpython(repo)
+
     def _do_cleanup_gitpython(self, repo) -> None:
+        """
+        Cleans up resources related to the Git repository.
+        """
         # Cleanup GitPython
-        collect()
-        repo.git.clear_cache()
         del repo
 
     def _do_clone_repo_to_path(self, base_path: str, repo_url: str) -> None:
-        """
-        Checks validity of configured git repo, as well as if it exists
-        Handles possible existing repo, and prompts (re)download of repo
-        Otherwise it just clones the repo and notifies user
-        """
-        if (
-            repo_url
-            and repo_url != ""
-            and repo_url.startswith("http://")
-            or repo_url.startswith("https://")
-        ):
-            # Calculate folder name from provided URL
+        if repo_url and repo_url.startswith(("http://", "https://")):
             repo_folder_name = os.path.split(repo_url)[1]
-            # Calculate path from generated folder name
-            repo_path = str((Path(base_path) / repo_folder_name))
-            if os.path.exists(repo_path):  # If local repo does exists
-                # Prompt to user to handle
+            repo_path = str(Path(base_path) / repo_folder_name)
+
+            if os.path.exists(repo_path) and os.listdir(repo_path):
                 answer = show_dialogue_conditional(
                     title="Existing repository found",
                     text="An existing local repo that matches this repository was found:",
                     information=(
                         f"{repo_path}\n\n"
-                        + "How would you like to handle? Choose option:\n"
-                        + "\n1) Clone new repository (deletes existing and replaces)"
-                        + "\n2) Update existing repository (in-place force-update)"
+                        "How would you like to handle? Choose option:\n"
+                        "\n1) Clone new repository (deletes existing and replaces)"
+                        "\n2) Update existing repository (in-place force-update)"
                     ),
-                    button_text_override=[
-                        "Clone new",
-                        "Update existing",
-                    ],
+                    button_text_override=["Clone new", "Update existing"],
                 )
                 if answer == "&Cancel":
                     logger.debug(
@@ -2206,124 +2177,102 @@ class MainContent(QObject):
                     return
                 elif answer == "Clone new":
                     logger.info(f"Deleting local git repo at: {repo_path}")
-                    delete_files_except_extension(directory=repo_path, extension=".dds")
+                    try:
+                        shutil.rmtree(repo_path)
+                    except PermissionError:
+                        show_warning(
+                            title="Permission Denied",
+                            text=f"Permission denied when trying to delete {repo_path}.",
+                        )
+                        return
                 elif answer == "Update existing":
                     self._do_force_update_existing_repo(
                         base_path=base_path, repo_url=repo_url
                     )
                     return
-            # Clone the repo to storage path and notify user
-            logger.info(f"Cloning {repo_url} to: {repo_path}")
+
             try:
-                Repo.clone_from(repo_url, repo_path)
+                clone_repository(repo_url, repo_path)
                 show_information(
                     title="Repo retrieved",
                     text="The configured repository was cloned!",
-                    information=f"{repo_url} ->\n" + f"{repo_path}",
+                    information=f"{repo_url} ->\n{repo_path}",
                 )
-            except GitCommandError:
-                try:
-                    # Initialize a new Git repository
-                    repo = Repo.init(repo_path)
-                    # Add the origin remote
-                    origin_remote = repo.create_remote("origin", repo_url)
-                    # Fetch the remote branches
-                    origin_remote.fetch()
-                    # Determine the target branch name
-                    target_branch = None
-                    for ref in repo.remotes.origin.refs:
-                        if ref.remote_head in ("main", "master"):
-                            target_branch = ref.remote_head
-                            break
-
-                    if target_branch:
-                        # Checkout the target branch
-                        repo.git.checkout(
-                            f"origin/{target_branch}", b=target_branch, force=True
-                        )
-                    else:
-                        # Handle the case when the target branch is not found
-                        logger.warning("Target branch not found.")
-                    show_information(
-                        title="Repo retrieved",
-                        text="The configured repository was reinitialized with existing files! (likely leftover .dds textures)",
-                        information=f"{repo_url} ->\n" + f"{repo_path}",
-                    )
-                except GitCommandError:
-                    stacktrace = traceback.format_exc()
-                    show_warning(
-                        title="Failed to clone repo!",
-                        text="The configured repo failed to clone/initialize! "
-                        + "Are you connected to the Internet? "
-                        + "Is your configured repo valid?",
-                        information=f"Configured repository: {repo_url}",
-                        details=stacktrace,
-                    )
+            except GitError:
+                stacktrace = traceback.format_exc()
+                show_warning(
+                    title="Failed to clone repo!",
+                    text="The configured repo failed to clone! "
+                    "Are you connected to the Internet? Is your configured repo valid?",
+                    information=f"Configured repository: {repo_url}",
+                    details=stacktrace,
+                )
         else:
-            # Warn the user so they know to configure in settings
             show_warning(
                 title="Invalid repository",
                 text="An invalid repository was detected!",
                 information="Please reconfigure a repository in settings!\n"
-                + "A valid repository is a repository URL which is not\n"
-                + 'empty and is prefixed with "http://" or "https://"',
+                + 'A valid repository is a URL prefixed with "http://" or "https://"',
             )
 
     def _do_force_update_existing_repo(self, base_path: str, repo_url: str) -> None:
-        """
-        Checks validity of configured git repo, as well as if it exists
-        Handles possible existing repo, and prompts (re)download of repo
-        Otherwise it just clones the repo and notifies user
-        """
-        if (
-            repo_url
-            and repo_url != ""
-            and repo_url.startswith("http://")
-            or repo_url.startswith("https://")
-        ):
-            # Calculate folder name from provided URL
+        if repo_url and repo_url.startswith(("http://", "https://")):
             repo_folder_name = os.path.split(repo_url)[1]
-            # Calculate path from generated folder name
-            repo_path = str((Path(base_path) / repo_folder_name))
-            if os.path.exists(repo_path):  # If local repo does exists
-                # Clone the repo to storage path and notify user
-                logger.info(f"Force updating git repository at: {repo_path}")
+            repo_path = str(Path(base_path) / repo_folder_name)
+
+            if os.path.exists(repo_path):
                 try:
-                    # Open repo
-                    repo = Repo(repo_path)
-                    # Determine the target branch name
-                    target_branch = None
-                    for ref in repo.remotes.origin.refs:
-                        if ref.remote_head in ("main", "master"):
-                            target_branch = ref.remote_head
-                            break
+                    repo = init_repository(repo_path)
+
+                    # Check if "origin" remote exists
+                    if "origin" not in repo.remotes:
+                        raise KeyError("remote 'origin' does not exist")
+
+                    origin = repo.remotes["origin"]
+                    origin.fetch()
+
+                    target_branch = next(
+                        (
+                            ref
+                            for ref in repo.listall_references()
+                            if ref.startswith("refs/remotes/origin/")
+                            and ref.endswith(("main", "master"))
+                        ),
+                        None,
+                    )
+
                     if target_branch:
-                        # Checkout the target branch
-                        repo.git.checkout(target_branch)
+                        repo.checkout(target_branch)
                     else:
-                        # Handle the case when the target branch is not found
                         logger.warning("Target branch not found.")
-                    # Reset the repository to HEAD in case of changes not committed
-                    repo.head.reset(index=True, working_tree=True)
-                    # Perform a pull with rebase
-                    origin = repo.remotes.origin
+
+                    # Get the target commit ID of the branch
+                    target_commit_id = repo.lookup_reference(target_branch).target
+
+                    # Reset to the target commit ID
+                    repo.reset(GIT_RESET_HARD, target_commit_id)
+
                     origin.pull(rebase=True)
-                    # Notify user
+
                     show_information(
                         title="Repo force updated",
                         text="The configured repository was updated!",
-                        information=f"{repo_path} ->\n "
-                        + f"{repo.head.commit.message}",
+                        information=f"{repo_path}\n{repo.head.commit.message}",
                     )
-                    # Cleanup
                     self._do_cleanup_gitpython(repo=repo)
-                except GitCommandError:
+                except GitError as e:
                     stacktrace = traceback.format_exc()
                     show_warning(
                         title="Failed to update repo!",
-                        text="The configured repo failed to update! "
-                        + "Are you connected to the Internet? "
-                        + "Is your configured repo valid?",
+                        text="The configured repo failed to update!",
+                        information=f"Configured repository: {repo_url}",
+                        details=stacktrace,
+                    )
+                except KeyError as e:
+                    stacktrace = traceback.format_exc()
+                    show_warning(
+                        title="Remote 'origin' does not exist!",
+                        text="The 'origin' remote does not exist in the repository!",
                         information=f"Configured repository: {repo_url}",
                         details=stacktrace,
                     )
@@ -2334,21 +2283,13 @@ class MainContent(QObject):
                     information="Would you like to clone a new copy of this repository?",
                 )
                 if answer == "&Yes":
-                    if GIT_EXISTS:
-                        self._do_clone_repo_to_path(
-                            base_path=base_path,
-                            repo_url=repo_url,
-                        )
-                    else:
-                        self._do_notify_no_git()
+                    self._do_clone_repo_to_path(base_path=base_path, repo_url=repo_url)
         else:
-            # Warn the user so they know to configure in settings
             show_warning(
                 title="Invalid repository",
                 text="An invalid repository was detected!",
                 information="Please reconfigure a repository in settings!\n"
-                + "A valid repository is a repository URL which is not\n"
-                + 'empty and is prefixed with "http://" or "https://"',
+                + 'A valid repository is a URL prefixed with "http://" or "https://"',
             )
 
     def _do_upload_db_to_repo(self, repo_url: str, file_name: str) -> None:
@@ -2431,10 +2372,10 @@ class MainContent(QObject):
                     pull_request_body = f"Steam Workshop {commit_message}"
 
                     # Open repo
-                    local_repo = Repo(repo_path)
+                    local_repo = Repository(repo_path)
 
                     # Create our new branch and checkout
-                    new_branch = local_repo.create_head(new_branch_name)
+                    new_branch = local_repo.create_reference(new_branch_name)
                     local_repo.head.reference = new_branch
 
                     # Add the file to the index on our new branch
@@ -2444,7 +2385,7 @@ class MainContent(QObject):
                     local_repo.index.commit(commit_message)
                     try:
                         # Push the changes to the remote repository and create a pull request from new_branch
-                        origin = local_repo.remote()
+                        origin = local_repo.remotes()
                         origin.push(new_branch)
                     except:
                         stacktrace = traceback.format_exc()
@@ -2501,13 +2442,10 @@ class MainContent(QObject):
                     information="Would you like to clone a new copy of this repository?",
                 )
                 if answer == "&Yes":
-                    if GIT_EXISTS:
-                        self._do_clone_repo_to_path(
-                            base_path=str(AppInfo().databases_folder),
-                            repo_url=repo_url,
-                        )
-                    else:
-                        self._do_notify_no_git()
+                    self._do_clone_repo_to_path(
+                        base_path=str(AppInfo().databases_folder),
+                        repo_url=repo_url,
+                    )
         else:
             # Warn the user so they know to configure in settings
             show_warning(
@@ -2516,15 +2454,6 @@ class MainContent(QObject):
                 information="Please reconfigure a repository in settings!\n"
                 + 'A valid repository is a repository URL which is not empty and is prefixed with "http://" or "https://"',
             )
-
-    def _do_notify_no_git(self) -> None:
-        answer = show_dialogue_conditional(  # We import last so we can use gui + utils
-            title="git not found",
-            text="git executable was not found in $PATH!",
-            information="git integration will not work without git installed! Do you want to open download page for git?",
-        )
-        if answer == "&Yes":
-            open_url_browser("https://git-scm.com/downloads")
 
     def _do_open_rule_editor(
         self, compact: bool, initial_mode=str, packageid=None
@@ -3098,13 +3027,10 @@ class MainContent(QObject):
 
     @Slot()
     def _on_do_download_community_db_from_github(self) -> None:
-        if GIT_EXISTS:
-            self._do_clone_repo_to_path(
-                base_path=str(AppInfo().databases_folder),
-                repo_url=self.settings_controller.settings.external_community_rules_repo,
-            )
-        else:
-            self._do_notify_no_git()
+        self._do_clone_repo_to_path(
+            base_path=str(AppInfo().databases_folder),
+            repo_url=self.settings_controller.settings.external_community_rules_repo,
+        )
 
     @Slot()
     def _on_do_upload_steam_workshop_db_to_github(self) -> None:
