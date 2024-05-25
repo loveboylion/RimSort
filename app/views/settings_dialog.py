@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.utils.gui_info import GUIInfo
+from app.utils.theme import Themes
 
 
 class SettingsDialog(QDialog):
@@ -32,7 +33,7 @@ class SettingsDialog(QDialog):
 
         self.setWindowTitle("Settings")
         self.setObjectName("settingsPanel")
-        self.resize(800, 600)
+        self.resize(900, 600)
 
         main_layout = QVBoxLayout()
         self.setLayout(main_layout)
@@ -48,6 +49,7 @@ class SettingsDialog(QDialog):
         self._do_db_builder_tab()
         self._do_steamcmd_tab()
         self._do_todds_tab()
+        self._do_themes_tab()
         self._do_advanced_tab()
 
         # Bottom buttons layout
@@ -730,6 +732,38 @@ class SettingsDialog(QDialog):
             "Overwrite existing optimized textures"
         )
         group_layout.addWidget(self.todds_overwrite_checkbox)
+
+    def _do_themes_tab(self) -> None:
+        tab = QWidget()
+        self.tab_widget.addTab(tab, "Themes")
+
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        group_box = QGroupBox()
+        tab_layout.addWidget(group_box)
+
+        group_layout = QVBoxLayout()
+        group_box.setLayout(group_layout)
+
+        self.themes_label = QLabel("Themes")
+        self.themes_label.setFont(GUIInfo().emphasis_font)
+        group_layout.addWidget(self.themes_label)
+
+        self.enable_themes_checkbox = QCheckBox(
+            "Enable to use Themes (stylesheet) or Disable to use System Theme"
+        )
+        group_layout.addWidget(self.enable_themes_checkbox)
+
+        self.themes_combobox = QComboBox()
+        self.themes_combobox.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred
+        )
+
+        # Get the available themes from the Themes class
+        available_themes = [folder.name for folder in Themes.get_available_themes()]
+        self.themes_combobox.addItems(available_themes)
+        group_layout.addWidget(self.themes_combobox)
 
     def _do_advanced_tab(self) -> None:
         tab = QWidget()

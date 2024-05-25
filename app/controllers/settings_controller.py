@@ -12,6 +12,7 @@ from app.utils.event_bus import EventBus
 from app.utils.generic import platform_specific_open
 from app.utils.steam.steamcmd.wrapper import SteamcmdInterface
 from app.utils.system_info import SystemInfo
+from app.utils.theme import Themes
 from app.views.settings_dialog import SettingsDialog
 
 
@@ -444,6 +445,18 @@ class SettingsController(QObject):
             self.settings.todds_overwrite
         )
 
+        # themes tab
+        if self.settings.enable_themes:
+            self.settings_dialog.enable_themes_checkbox.setChecked(True)
+        # get theme names
+        current_theme_name = self.settings.theme
+        current_index = self.settings_dialog.themes_combobox.findText(
+            current_theme_name
+        )
+        if current_index != -1:
+            self.settings_dialog.themes_combobox.setCurrentIndex(current_index)
+        else:
+            self.settings_dialog.themes_combobox.setCurrentIndex(0)
         # Advanced tab
         self.settings_dialog.debug_logging_checkbox.setChecked(
             self.settings.debug_logging_enabled
@@ -576,6 +589,23 @@ class SettingsController(QObject):
         self.settings.todds_overwrite = (
             self.settings_dialog.todds_overwrite_checkbox.isChecked()
         )
+
+        # themes tab
+        if self.settings_dialog.enable_themes_checkbox.isChecked():
+            self.settings.enable_themes = True
+        else:
+            self.settings.enable_themes = False
+        # get theme names
+        selected_theme = self.settings_dialog.themes_combobox.currentText()
+        self.settings.theme = selected_theme
+        available_themes = [folder.name for folder in Themes.get_available_themes()]
+
+        if selected_theme in available_themes:
+            self.settings.theme = selected_theme
+        else:
+            # Handle invalid theme selection
+            logger.warning(f"Invalid theme selected: {selected_theme}")
+            self.settings.theme = "RimPy"  # Set a default theme
 
         # Advanced tab
         self.settings.debug_logging_enabled = (

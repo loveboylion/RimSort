@@ -44,6 +44,8 @@ class Settings(QObject):
         self._todds_active_mods_target: bool = False
         self._todds_dry_run: bool = False
         self._todds_overwrite: bool = False
+        self._enable_themes: bool = False
+        self._theme: str = ""
         self._current_instance: Optional[str] = None
         self._instances: dict[str, dict[str, Any]] = {}
         self._github_username: str = ""
@@ -84,6 +86,8 @@ class Settings(QObject):
         self._todds_active_mods_target = True
         self._todds_dry_run = False
         self._todds_overwrite = False
+        self._enable_themes = True
+        self._theme = "RimPy"
         self._current_instance = "Default"
         self._instances: Dict[str, Dict[str, str]] = {
             "Default": {
@@ -366,6 +370,28 @@ class Settings(QObject):
         EventBus().settings_have_changed.emit()
 
     @property
+    def enable_themes(self) -> bool:
+        return self._enable_themes
+
+    @enable_themes.setter
+    def enable_themes(self, value: bool) -> None:
+        if value == self._enable_themes:
+            return
+        self._enable_themes = value
+        EventBus().settings_have_changed.emit()
+
+    @property
+    def theme(self) -> str:
+        return self._theme
+
+    @theme.setter
+    def theme(self, value: str) -> None:
+        if value == self._theme:
+            return
+        self._theme = value
+        EventBus().settings_have_changed.emit()
+
+    @property
     def current_instance(self) -> str:
         return self._current_instance
 
@@ -643,6 +669,14 @@ class Settings(QObject):
             self.todds_overwrite = data["todds_overwrite"]
             del data["todds_overwrite"]
 
+        if "enable_themes" in data:
+            self.enable_themes = data["enable_themes"]
+            del data["enable_themes"]
+
+        if "theme" in data:
+            self.theme = data["theme"]
+            del data["theme"]
+
         if "current_instance" in data:
             self.current_instance = data["current_instance"]
             del data["current_instance"]
@@ -688,6 +722,8 @@ class Settings(QObject):
             "todds_active_mods_target": self.todds_active_mods_target,
             "todds_dry_run": self.todds_dry_run,
             "todds_overwrite": self.todds_overwrite,
+            "enable_themes": self.enable_themes,
+            "theme": self.theme,
             "current_instance": self.current_instance,
             "instances": self.instances,
             "github_username": self.github_username,

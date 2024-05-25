@@ -11,6 +11,7 @@ from app.utils.app_info import AppInfo
 from app.utils.constants import DEFAULT_USER_RULES
 from app.utils.metadata import MetadataManager
 from app.utils.steam.steamcmd.wrapper import SteamcmdInterface
+from app.utils.theme import Themes
 from app.views.main_window import MainWindow
 from app.views.settings_dialog import SettingsDialog
 
@@ -20,14 +21,6 @@ class AppController(QObject):
         super().__init__()
 
         self.app = QApplication(sys.argv)
-
-        self.app.setStyle("Fusion")
-
-        self.app.setStyleSheet(  # Add style sheet for styling layouts and widgets
-            (
-                (AppInfo().application_folder / "themes" / "RimPy" / "style.qss")
-            ).read_text()
-        )
 
         # One-time initialization of userRules.json
         user_rules_path = AppInfo().databases_folder / "userRules.json"
@@ -59,6 +52,13 @@ class AppController(QObject):
         # Instantiate the main window and its controller
         self.main_window = MainWindow(settings_controller=self.settings_controller)
         self.main_window_controller = MainWindowController(self.main_window)
+
+        # Initialize themes
+        if self.settings.enable_themes is True:
+            self.app.setStyle("Fusion")
+            theme_name = self.settings.theme
+            theme = Themes(theme_name)
+            self.app.setStyleSheet(theme.style_sheet())
 
     def run(self) -> int:
         self.main_window.show()
